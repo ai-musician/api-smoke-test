@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GenAI Knowledge Assistant — Architecture</title>
+<style>
+  :root {
+    --ink: #1a2332;
+    --muted: #5b6675;
+    --line: #d7dce3;
+    --paper: #ffffff;
+    --panel: #f6f8fa;
+    --accent: #0f62fe;       /* pipeline */
+    --accent-soft: #e8f0fe;
+    --green: #0e7a4d;        /* quality */
+    --green-soft: #e6f4ec;
+    --amber: #9a6700;        /* feedback */
+    --amber-soft: #fff4d6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--paper); color: var(--ink);
+    padding: 28px 36px; max-width: 1320px; margin: 0 auto;
+  }
+  h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.2px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; margin-bottom: 22px; }
+  .lane {
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px 16px; margin-bottom: 14px; background: var(--paper);
+  }
+  .lane-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; margin-bottom: 10px;
+  }
+  .lane.ingest .lane-title { color: var(--accent); }
+  .lane.query  .lane-title { color: var(--accent); }
+  .lane.quality .lane-title { color: var(--green); }
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; row-gap: 14px; }
+  .box {
+    background: var(--panel); border: 1.5px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; min-width: 128px; max-width: 190px; flex: 1;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .box > b { font-size: 13px; display: block; margin-bottom: 3px; }
+  .box span { font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+  .box.blue  { border-color: var(--accent); background: var(--accent-soft); }
+  .box.green { border-color: var(--green);  background: var(--green-soft); }
+  .box.amber { border-color: var(--amber);  background: var(--amber-soft); }
+  .arrow {
+    align-self: center; padding: 0 7px; color: var(--muted);
+    font-size: 17px; font-weight: 600; flex: 0 0 auto;
+  }
+  .note {
+    margin-top: 10px; font-size: 11.5px; color: var(--muted);
+    border-left: 3px solid var(--line); padding-left: 10px; line-height: 1.45;
+  }
+  .cols { display: flex; gap: 14px; }
+  .cols .lane { flex: 1; margin-bottom: 0; }
+  .footer { margin-top: 14px; font-size: 11px; color: var(--muted); }
+  @media print { body { padding: 10px; } }
+</style>
+</head>
+<body>
+
+<h1>GenAI Knowledge Assistant — Slack-native RAG</h1>
+<div class="subtitle">Solo-built · Anthropic Claude + Pinecone + AWS Bedrock · architecture recreated &amp; sanitized (no proprietary data)</div>
+
+<!-- LANE 1: INGESTION -->
+<div class="lane ingest">
+  <div class="lane-title">1 · Ingestion pipeline (offline)</div>
+  <div class="flow">
+    <div class="box"><b>Knowledge sources</b><span>Slack channels · wiki pages · issue tracker · shared docs</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><b>Connectors &amp; sync</b><span>per-source ingestion, incremental updates</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><b>Semantic chunking</b><span>structure-aware splits, source-type metadata attached</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><b>Embedding</b><span>AWS Bedrock · Titan v2 (selected via ablation testing)</span></div>
+    <div class="arrow">→</div>
+    <div class="box blue"><b>Pinecone index</b><span>shared namespace per <i>source type</i>; team ownership as metadata — not a namespace per team</span></div>
+  </div>
+  <div class="note"><b>Design decision:</b> shared namespaces + per-team metadata filtering at query time — avoids namespace sprawl and keeps one consistent schema per source type.</div>
+</div>
+
+<!-- LANE 2: QUERY -->
+<div class="lane query">
+  <div class="lane-title">2 · Query path (online, per request)</div>
+  <div class="flow">
+    <div class="box"><b>User question</b><span>Slack message to the bot</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><b>Query embedding</b><span>same model as ingestion</span></div>
+    <div class="arrow">→</div>
+    <div class="box blue"><b>Filtered retrieval</b><span>metadata filters: team, source type · top-k across namespaces</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><b>Source-aware ranking</b><span>weighted cosine scores by source reliability</span></div>
+    <div class="arrow">→</div>
+    <div class="box green"><b>Confidence gate</b><span>below threshold → <b>abstain</b> ("I don't know") instead of hallucinating</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><b>Claude (Sonnet 4)</b><span>grounded prompt, tuned context window</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><b>Answer in Slack</b><span>with inline citation indices [1][2]</span></div>
+  </div>
+</div>
+
+<!-- LANE 3: QUALITY -->
+  <div class="lane quality">
+    <div class="lane-title">3 · Quality: automated eval &amp; release gate</div>
+    <div class="flow">
+      <div class="box green"><b>Golden query set</b><span>versioned, grown from real field failures</span></div>
+      <div class="arrow">→</div>
+      <div class="box green"><b>Scored eval runs</b><span>retrieval &amp; ranking scored as <b>distributions</b>, not exact-match asserts</span></div>
+      <div class="arrow">→</div>
+      <div class="box green"><b>Per-cohort thresholds</b><span>sliced by source type / team / query class</span></div>
+      <div class="arrow">→</div>
+      <div class="box green"><b>Pre-release regression gate</b><span>blocks deploy on statistical regression vs. baseline</span></div>
+    </div>
+    <div class="note"><b>Why:</b> output is probabilistic — deterministic pass/fail lies. Gate on score distributions with a measured noise band.</div>
+  </div>
+
+<!-- LANE 4: FEEDBACK -->
+  <div class="lane quality">
+    <div class="lane-title">4 · Feedback loop &amp; observability</div>
+    <div class="flow">
+      <div class="box amber"><b>User feedback</b><span>👍 / 👎 on every answer</span></div>
+      <div class="arrow">→</div>
+      <div class="box amber"><b>Knowledge Gaps queue</b><span>downvotes triaged by admins</span></div>
+      <div class="arrow">→</div>
+      <div class="box amber"><b>Fixes &amp; new eval cases</b><span>failures become permanent golden-set cohorts</span></div>
+    </div>
+    <div class="note"><b>Admin web UI:</b> raw &amp; weighted cosine scores + citation traces per answer — no black-box responses; every answer is explainable.</div>
+  </div>
+
+<div class="footer">Sanitized architecture overview drawn from memory for discussion purposes — contains no employer data, content, or internal identifiers.</div>
+
+</body>
+</html>
