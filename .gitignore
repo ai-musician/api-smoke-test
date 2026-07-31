@@ -1,1 +1,5 @@
 venv/
+venv/
+*.pdf
+*.html
+perf_results.txt
